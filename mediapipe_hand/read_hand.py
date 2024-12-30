@@ -261,6 +261,21 @@ def draw_movingframe(T):
     plt.show()
     plt.close()
 
+if __name__ == "__main__":
+    pd_data = hand_pose("/home/hanglok/work/hand_pose/mediapipe_hand/data_save/norm_point_cloud/2024-11-28_16-12-26.csv")
+    data = pd_data.get_hand_pose(40, 80)
+    back_hand = pd_data.get_back_hand(data)
+    # while True:
+    # pd_data.draw_carton(back_hand, delay=0.1)
+    T_list = []
+    for i in range(len(back_hand)-1):
+        # print("back hand ", back_hand[i])
+        T_list.append(find_transformation(back_hand[i], back_hand[i+1]))
+
+    T_new = smooth_trajectory(T_list)
+
+    draw_movingframe(T_new)
+
 
 
 

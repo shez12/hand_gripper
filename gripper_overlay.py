@@ -176,7 +176,6 @@ if __name__ == "__main__":
     gripper.update_plot_limits()
 
     # 示例：动态调整 grip_scale
-    import time
 
     try:
         for scale in range(0, 1001, 100):
