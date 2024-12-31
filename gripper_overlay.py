@@ -1,67 +1,96 @@
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+# Standard library imports
 import numpy as np
 
+# Third-party imports
+import cv2
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 
-
-def get_gripper_scale(distance):
-    #each set is 3 numbers get the distance between the two points(4 and 8)
-
-    gripper_scale=1000*(distance)/0.1
-    gripper_scale = max(0, min(gripper_scale, 1000))  # Clamp gripper_scale between 0 and 1000
-    gripper_scale = (gripper_scale // 200) * 200     # Round down to the nearest multiple of 200
-    return gripper_scale
+def get_gripper_scale(distance: float) -> float:
+    """
+    Calculate gripper scale based on distance between points.
+    
+    Args:
+        distance (float): Distance between gripper points in meters
+        
+    Returns:
+        float: Calculated gripper scale rounded to nearest 200
+    """
+    gripper_scale = 1000 * distance / 0.1
+    gripper_scale = max(0, min(gripper_scale, 1000))  # Clamp between 0-1000
+    return (gripper_scale // 200) * 200  # Round to nearest 200
 
 
 class GripperOverlay:
-    def __init__(self, ax):
+    """A class to handle 3D gripper visualization overlay."""
+    
+    def __init__(self, ax: Axes3D):
+        """
+        Initialize the gripper overlay.
+        
+        Args:
+            ax (Axes3D): Matplotlib 3D axes object for rendering
+        """
         self.ax = ax
         self.gripper_lines = []
-        self.grip_scale = 0  # 初始化为完全并拢
-        self.max_spread = 0.1  # 最大分离距离 10 cm
-        self.gripper_width = 0.02  # 2 cm
-        self.gripper_length = 0.1  # 6 cm
-        self.gripper_height = 0.02  # 2 cm
-        self.base_x = 0.5  # 50 cm
-        self.base_y = 0.5  # 50 cm
-        self.base_z = 0.5  # 50 cm
-        self.column_depth = 0.02  # 2 cm
+        
+        # Constants for gripper dimensions (in meters)
+        self.grip_scale = 0
+        self.max_spread = 0.1
+        self.gripper_width = 0.02
+        self.gripper_length = 0.1
+        self.gripper_height = 0.02
+        self.base_x = 0.5
+        self.base_y = 0.5
+        self.base_z = 0.5
+        self.column_depth = 0.02
 
-        self._draw_gripper_parts()
+    def _create_cuboid_vertices(self, start, end, height, depth):
+        """
+        args:
+            start: tuple, start point
+            end: tuple, end point
+            height: float, height of the cuboid
+            depth: float, depth of the cuboid
+        """
+        direction = np.array(end) - np.array(start)
+        length = np.linalg.norm(direction)
+        if length == 0:
+            raise ValueError("Start and end points cannot be the same.")
 
-    def set_grip_scale(self, scale):
-        """
-        设置夹爪的张开程度。
-        :param scale: int, 取值范围为 0 - 1000
-        """
-        if scale < 0:
-            scale = 0
-        elif scale > 1000:
-            scale = 1000
-        self.grip_scale = scale
-        self._draw_gripper_parts()
+        direction = direction / length  # Normalize the direction
 
-    def _create_cuboid_vertices(self, x, y, z, width, height, depth):
-        """
-        创建长方体的8个顶点。
-        """
+        # Calculate the perpendicular vectors for width and height
+        perp_vector = np.cross(direction, [0, 0, 1])
+        if np.linalg.norm(perp_vector) == 0:
+            perp_vector = np.cross(direction, [0, 1, 0])
+        perp_vector = perp_vector / np.linalg.norm(perp_vector)
+
+        height_vector = np.cross(direction, perp_vector)
+        height_vector = height_vector / np.linalg.norm(height_vector)
+
+        # Calculate the vertices
         return [
-            [x, y, z],
-            [x + width, y, z],
-            [x + width, y + height, z],
-            [x, y + height, z],
-            [x, y, z + depth],
-            [x + width, y, z + depth],
-            [x + width, y + height, z + depth],
-            [x, y + height, z + depth]
+            start,
+            start + direction * length,
+            start + direction * length + height_vector * height,
+            start + height_vector * height,
+            start + perp_vector * depth,
+            start + direction * length + perp_vector * depth,
+            start + direction * length + height_vector * height + perp_vector * depth,
+            start + height_vector * height + perp_vector * depth
         ]
 
     def _draw_lines(self, vertices, color='blue'):
         """
-        根据顶点绘制长方体的边缘线。
+        Draw edges of a cuboid based on given vertices.
+        
+        Args:
+            vertices (list): List of 8 vertices (each a tuple (x, y, z))
+            color (str): Color of the lines, default is 'blue'
         """
-        # 定义长方体的12条边
+        # Define the 12 edges of the cuboid
         edges = [
             (0, 1), (1, 2), (2, 3), (3, 0),  # 底面
             (4, 5), (5, 6), (6, 7), (7, 4),  # 顶面
@@ -80,110 +109,121 @@ class GripperOverlay:
 
     def _clear_gripper(self):
         """
-        清除之前绘制的夹爪和柱子的线条。
+        Clear previously drawn gripper and column lines.
         """
         for line in self.gripper_lines:
             line.remove()
         self.gripper_lines = []
 
-    def _draw_gripper_parts(self):
-        # 清除之前的夹爪和柱子
+    def draw_gripper_from_points(self, top_left, top_right, bottom_left, bottom_right):
+        """Draw gripper based on four input points."""
         self._clear_gripper()
 
-        # 计算分离偏移量
-        spread_ratio = self.grip_scale / 1000.0  # 0.0 到 1.0
-        spread_offset = spread_ratio * self.max_spread  # 最大分离距离 0.1 m
+        # Calculate base vectors
+        base_mid = np.mean([top_left, top_right], axis=0)
+        base_vector = np.array(bottom_left) - np.array(bottom_right)
+        base_vector = base_vector / np.linalg.norm(base_vector)
+        
+        plane_vector = np.cross(base_vector, np.array(top_left) - np.array(bottom_right))
+        plane_vector = plane_vector / np.linalg.norm(plane_vector)
 
-        print(f"Grip Scale: {self.grip_scale}, Spread Offset: {spread_offset}")
+        # Calculate gripper vectors
+        left_vector = right_vector = np.cross(base_vector, plane_vector)
+        left_vector = right_vector = left_vector / np.linalg.norm(left_vector)
 
-        # 左右夹爪沿 x 轴偏移
-        left_gripper_x = self.base_x - spread_offset / 2
-        right_gripper_x = self.base_x + self.gripper_width + spread_offset / 2
+        # Calculate positions
+        distance = np.linalg.norm(np.array(top_left) - np.array(top_right))
+        top_left_start = base_mid + base_vector * distance/2
+        top_right_start = base_mid - base_vector * distance/2
+        top_left_end = top_left_start + left_vector * 0.05
+        top_right_end = top_right_start + right_vector * 0.05
 
-        print(f"Left Gripper X: {left_gripper_x}, Right Gripper X: {right_gripper_x}")
+        # Draw gripper rods
+        for start, end in [(top_left_start, top_left_end), (top_right_start, top_right_end)]:
+            rod = self._create_cuboid_vertices(start, end, self.gripper_height, self.column_depth)
+            self._draw_lines(rod, color='blue')
 
-        # 创建夹爪顶点
-        left_gripper = self._create_cuboid_vertices(
-            left_gripper_x,
-            self.base_y,
-            self.base_z,
-            self.gripper_width,
-            self.gripper_height,
-            self.gripper_length
-        )
-        right_gripper = self._create_cuboid_vertices(
-            right_gripper_x,
-            self.base_y,
-            self.base_z,
-            self.gripper_width,
-            self.gripper_height,
-            self.gripper_length
-        )
+        # Draw points and legend
+        points = [(top_left, 'red', 'Top Left'), 
+                 (top_right, 'green', 'Top Right'),
+                 (bottom_left, 'orange', 'Bottom Left'),
+                 (bottom_right, 'purple', 'Bottom Right')]
+        
+        for point, color, label in points:
+            self.ax.scatter(*point, color=color, s=50, label=label)
+        self.ax.legend()
 
-        # 绘制夹爪边缘
-        self._draw_lines(left_gripper, color='blue')
-        self._draw_lines(right_gripper, color='blue')
-
-        # 计算水平柱子的长度
-        column_length = self.gripper_width * 2 + spread_offset  # 根据分离距离调整
-
-        print(f"Column Length: {column_length}")
-
-        # 计算柱子的位置（位于夹爪的底部中间，水平连接两端）
-        column_x = self.base_x - spread_offset / 2  # 起始 x 位置，考虑当前分离
-        column_y = self.base_y  # y 位置，与夹爪底面对齐
-        column_z = self.base_z - (self.column_depth / 2)  # z 位置，确保柱子居中
-
-        print(f"Column X: {column_x}, Column Y: {column_y}, Column Z: {column_z}")
-
-        # 创建柱子顶点
-        horizontal_column = self._create_cuboid_vertices(
-            column_x,
-            column_y,
-            column_z,
-            column_length,
-            self.gripper_height,
-            self.column_depth
-        )
-
-        # 绘制柱子边缘
-        self._draw_lines(horizontal_column, color='blue')
-
-    def update_plot_limits(self):
+    def draw_gripper_from_points_cv(
+        self, 
+        top_left: tuple, 
+        top_right: tuple, 
+        bottom_left: tuple, 
+        bottom_right: tuple, 
+        image: np.ndarray,
+        fx: float,
+        fy: float,
+        cx: float,
+        cy: float
+    ) -> None:
         """
-        更新坐标轴的显示范围，以适应夹爪和柱子的动态变化。
+        Draw gripper overlay on OpenCV image based on four input points.
+        
+        Args:
+            top_left: Left column top coordinates (x, y, z)
+            top_right: Right column top coordinates (x, y, z)
+            bottom_left: Left linkage point coordinates (x, y, z)
+            bottom_right: Right linkage point coordinates (x, y, z)
+            image: OpenCV image to draw on
+            fx, fy: Camera focal lengths
+            cx, cy: Camera principal point coordinates
         """
-        self.ax.auto_scale_xyz(
-            [self.base_x - self.max_spread, self.base_x + self.gripper_width + self.max_spread],
-            [self.base_y - 0.05, self.base_y + self.gripper_height + 0.05],
-            [self.base_z - self.gripper_length - 0.05, self.base_z + 0.05]
-        )
+        def project_point(point):
+            """Project 3D point to 2D image coordinates."""
+            x, y, z = point
+            x_2d = int((x * fx / z) + cx)
+            y_2d = int((y * fy / z) + cy)
+            return (x_2d, y_2d)
 
-if __name__ == "__main__":
-    # 创建 Matplotlib 图形和 3D 坐标轴
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+        # Calculate base vectors and normalize
+        base_mid = np.mean([top_left, top_right], axis=0)
+        base_vector = np.array(bottom_left) - np.array(bottom_right)
+        base_vector = base_vector / np.linalg.norm(base_vector)
 
-    # 设置初始坐标轴范围 (单位：米)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_zlim(0, 1)
+        plane_vector = np.cross(base_vector, np.array(top_left) - np.array(bottom_right))
+        plane_vector = plane_vector / np.linalg.norm(plane_vector)
 
-    # 实例化 GripperOverlay 并传入 ax
-    gripper = GripperOverlay(ax)
+        left_vector = np.cross(base_vector, plane_vector)
+        left_vector = left_vector / np.linalg.norm(left_vector)
+        right_vector = np.cross(base_vector, plane_vector)
+        right_vector = right_vector / np.linalg.norm(right_vector)
 
-    # 更新坐标轴范围以适应初始位置
-    gripper.update_plot_limits()
+        distance = np.linalg.norm(np.array(top_left) - np.array(top_right))
 
-    # 示例：动态调整 grip_scale
+        distance = min(distance, 0.1)
+        
+        top_left_start = base_mid + base_vector * distance / 2
+        top_right_start = base_mid - base_vector * distance / 2
 
-    try:
-        for scale in range(0, 1001, 100):
-            gripper.set_grip_scale(scale)
-            gripper.update_plot_limits()
-            plt.draw()
-            plt.pause(0.5)  # 暂停0.5秒观察变化
-    except KeyboardInterrupt:
-        pass  # 允许用户通过 Ctrl+C 中断循环
+        top_left_end = top_left_start + left_vector * 0.05
+        top_right_end = top_right_start + right_vector * 0.05
 
-    plt.show()
+        # Project and draw lines
+        top_left_2d = project_point(top_left_start)
+        top_left_end_2d = project_point(top_left_end)
+        cv2.line(image, top_left_2d, top_left_end_2d, (255, 0, 0), 2)  # Blue line
+
+        top_right_2d = project_point(top_right_start)
+        top_right_end_2d = project_point(top_right_end)
+        cv2.line(image, top_right_2d, top_right_end_2d, (255, 0, 0), 2)  # Blue line
+
+        # Draw the input points
+        bottom_left_2d = project_point(bottom_left)
+        bottom_right_2d = project_point(bottom_right)
+
+
+        cv2.line(image, top_left_end_2d, top_right_end_2d, (0, 0, 255), 2)  # Red line
+        cv2.circle(image, top_left_2d, 5, (0, 0, 255), -1)  # Red point
+        cv2.circle(image, top_right_2d, 5, (0, 255, 0), -1)  # Green point
+        cv2.circle(image, bottom_left_2d, 5, (0, 165, 255), -1)  # Orange point
+        cv2.circle(image, bottom_right_2d, 5, (128, 0, 128), -1)  # Purple point
+
