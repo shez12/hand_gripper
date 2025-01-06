@@ -5,6 +5,7 @@ import numpy as np
 from spatialmath import SE3
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.transform import Rotation as R
+from spatialmath.base import trnorm
 
 def get_gripper_scale(distance):
     #each set is 3 numbers get the distance between the two points(4 and 8)
@@ -72,7 +73,7 @@ class hand_pose:
         landmarks_list = []
         for index, row in data.iterrows():
             landmarks = []
-            for i in [0,1,5,13,17]:
+            for i in [0,5,9]:
                 points = SE3.Tx(row[f"{i}_x_norm"]) @ SE3.Ty(row[f"{i}_y_norm"]) @ SE3.Tz(row[f"{i}_z_norm"])
                 transformations = SE3.Rz(-90,unit='deg') 
                 new_points =  transformations * points 
@@ -140,11 +141,15 @@ def draw3d(plt, ax, world_landmarks, connnection):
     plt.pause(0.001)
 
 
-def find_transformation(X, Y):
+def find_transformation(X, Y,translation_only=False):
 
     # Calculate centroids
     cX = np.mean(X, axis=0)
     cY = np.mean(Y, axis=0)
+    if translation_only:
+        T = np.eye(4)
+        T[:3, 3] = cY - cX
+        return T
     # Subtract centroids to obtain centered sets of points
     Xc = X - cX
     Yc = Y - cY
@@ -195,7 +200,7 @@ def smooth_trajectory(T_):
 
 
 
-def draw_movingframe(T):
+def draw_movingframe(T,keypoints):
     """
     动态绘制点云和坐标系的移动过程
     :param point_clouds: 初始点云数据 (N x 3 的 numpy 数组)
@@ -211,23 +216,28 @@ def draw_movingframe(T):
     ax.set_xlabel("X-axis")
     ax.set_ylabel("Y-axis")
     ax.set_zlabel("Z-axis")
-    trajectory = []  # List to store trajectory points  
+    trajectory = []  # List to store trajectory points
+    points =[]  
     T_overall = SE3(np.eye(4))
     T_list = []
     for i in range(len(T)):
-        ax.cla()  # 清除当前图形内容
+        pointcloud = []
+        pointcloud2 = []
+        T_overall = T_overall * SE3(trnorm(T[i]))
+        for j in range(len(keypoints[i])):
+            pointcloud.append(SE3(trnorm(T[i])) * SE3.Trans(keypoints[i][j]).t)
+            pointcloud2.append(T_overall * SE3.Trans(keypoints[0][j]).t)
+        
+        print("pointcloud ",pointcloud)
+        print("key points",keypoints[i+1])
+        print("overall ",pointcloud2)
 
-        # 更新坐标轴标签
-        ax.set_xlabel("X-axis")
-        ax.set_ylabel("Y-axis")
-        ax.set_zlabel("Z-axis")
-        ax.set_xlim(-1, 1)
-        ax.set_ylim(-1, 2)
-        ax.set_zlim(-1, 1)
+
+        print("============")
+        
 
 
-        # 变换后的点云
-        T_overall = T_overall *T[i]
+        points.append(np.array(pointcloud2))  # Convert pointcloud to numpy array
         T_list.append(T_overall)
         
         transformed_points = T_overall.t
@@ -236,45 +246,46 @@ def draw_movingframe(T):
         trajectory.append(centroid)
 
     # Apply Gaussian smoothing to the trajectory
-
-
-
     smoothed_trajectory = np.array(trajectory)
-     
-
-
-    for i in range(1, len(smoothed_trajectory)):
-        ax.cla()  # 清除当前图形内容
-        ax.set_xlabel("X-axis")
-        ax.set_ylabel("Y-axis")
-        ax.set_zlabel("Z-axis")
-        ax.set_xlim(-1, 1)
-        ax.set_ylim(-1, 2)
-        ax.set_zlim(-1, 1)
-
-        ax.plot(smoothed_trajectory[:i, 0], smoothed_trajectory[:i, 1], smoothed_trajectory[:i, 2], c='r', label="Trajectory")
-        ax.scatter(smoothed_trajectory[i, 0], smoothed_trajectory[i, 1], smoothed_trajectory[i, 2], c='b', s=5, label="Point Cloud")
         
-        ax.legend()
-        plt.pause(.1)  # 每帧暂停 1 秒
+    for n in range(20):
+        for i in range(1, len(smoothed_trajectory)):
+            ax.cla()  # 清除当前图形内容
+            ax.set_xlabel("X-axis")
+            ax.set_ylabel("Y-axis")
+            ax.set_zlabel("Z-axis")
+            ax.set_xlim(-1, 1)
+            ax.set_ylim(-1, 1)
+            ax.set_zlim(-1, 1)
+
+            ax.plot(smoothed_trajectory[:i, 0], smoothed_trajectory[:i, 1], smoothed_trajectory[:i, 2], c='r', label="Trajectory")
+            ax.scatter(smoothed_trajectory[i, 0], smoothed_trajectory[i, 1], smoothed_trajectory[i, 2], c='b', s=5, label="Point Cloud")
+            ax.scatter(keypoints[i][:, 0], keypoints[i][:, 1], keypoints[i][:, 2], c='y', s=5, label="Key Points")
+            # Convert points[i] to numpy array if it isn't already
+            current_points = np.array(points[i])
+            ax.scatter(current_points[:, 0], current_points[:, 1], current_points[:, 2], c='g', s=5, label="transformed points")
+
+            ax.legend()
+            plt.pause(0.5)  # 每帧暂停 1 秒
         
     plt.show()
     plt.close()
 
 if __name__ == "__main__":
-    pd_data = hand_pose("/home/hanglok/work/hand_pose/mediapipe_hand/data_save/norm_point_cloud/2024-11-28_16-12-26.csv")
-    data = pd_data.get_hand_pose(40, 80)
-    back_hand = pd_data.get_back_hand(data)
+    pd_data = hand_pose("/home/hanglok/work/hand_gripper/mediapipe_hand/data_save/norm_point_cloud/hand_pose_2024-12-31_16-05-16.csv")
+    data = pd_data.get_hand_pose(2,50)
+    keypoints = pd_data.get_keypoints(data)
     # while True:
     # pd_data.draw_carton(back_hand, delay=0.1)
     T_list = []
-    for i in range(len(back_hand)-1):
+    for i in range(len(keypoints)-1):
         # print("back hand ", back_hand[i])
-        T_list.append(find_transformation(back_hand[i], back_hand[i+1]))
+        T_list.append(find_transformation(keypoints[i], keypoints[i+1],translation_only=True))
 
     T_new = smooth_trajectory(T_list)
 
-    draw_movingframe(T_new)
+
+    draw_movingframe(T_list,keypoints)
 
 
 
