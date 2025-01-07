@@ -5,6 +5,20 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from mediapipe_hand.read_hand import _4points_to_3d
+
+
+CAMERA_PARAMS = {
+    'fx': 599.5029,
+    'fy': 598.7244,
+    'cx': 323.4041,
+    'cy': 254.9281
+}
+fx = CAMERA_PARAMS['fx']
+fy = CAMERA_PARAMS['fy']
+cx = CAMERA_PARAMS['cx']
+cy = CAMERA_PARAMS['cy']
+
 
 
 def get_gripper_scale(distance: float) -> float:
@@ -20,6 +34,10 @@ def get_gripper_scale(distance: float) -> float:
     gripper_scale = 1000 * distance / 0.1
     gripper_scale = max(0, min(gripper_scale, 1000))  # Clamp between 0-1000
     return (gripper_scale // 200) * 200  # Round to nearest 200
+
+
+
+
 
 
 class GripperOverlay:
@@ -153,17 +171,12 @@ class GripperOverlay:
             self.ax.scatter(*point, color=color, s=50, label=label)
         self.ax.legend()
 
-    def draw_gripper_from_points_cv(
-        self, 
+def draw_gripper_from_points_cv(
         top_left: tuple, 
         top_right: tuple, 
         bottom_left: tuple, 
         bottom_right: tuple, 
         image: np.ndarray,
-        fx: float,
-        fy: float,
-        cx: float,
-        cy: float
     ) -> None:
         """
         Draw gripper overlay on OpenCV image based on four input points.
@@ -184,28 +197,7 @@ class GripperOverlay:
             y_2d = int((y * fy / z) + cy)
             return (x_2d, y_2d)
 
-        # Calculate base vectors and normalize
-        base_mid = np.mean([top_left, top_right], axis=0)
-        base_vector = np.array(bottom_left) - np.array(bottom_right)
-        base_vector = base_vector / np.linalg.norm(base_vector)
-
-        plane_vector = np.cross(base_vector, np.array(top_left) - np.array(bottom_right))
-        plane_vector = plane_vector / np.linalg.norm(plane_vector)
-
-        left_vector = np.cross(base_vector, plane_vector)
-        left_vector = left_vector / np.linalg.norm(left_vector)
-        right_vector = np.cross(base_vector, plane_vector)
-        right_vector = right_vector / np.linalg.norm(right_vector)
-
-        distance = np.linalg.norm(np.array(top_left) - np.array(top_right))
-
-        distance = min(distance, 0.1)
-        
-        top_left_start = base_mid + base_vector * distance / 2
-        top_right_start = base_mid - base_vector * distance / 2
-
-        top_left_end = top_left_start + left_vector * 0.05
-        top_right_end = top_right_start + right_vector * 0.05
+        top_left_start,top_left_end,top_right_start,top_right_end = _4points_to_3d([top_left, top_right, bottom_left, bottom_right])
 
         # Project and draw lines
         top_left_2d = project_point(top_left_start)
@@ -226,4 +218,8 @@ class GripperOverlay:
         cv2.circle(image, top_right_2d, 5, (0, 255, 0), -1)  # Green point
         cv2.circle(image, bottom_left_2d, 5, (0, 165, 255), -1)  # Orange point
         cv2.circle(image, bottom_right_2d, 5, (128, 0, 128), -1)  # Purple point
+        return top_left_start,top_left_end,top_right_end
+
+
+
 

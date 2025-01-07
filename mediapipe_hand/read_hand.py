@@ -66,14 +66,14 @@ class hand_pose:
     def get_hand_pose(self,start, end):
         return self.df.iloc[start:end]
 
-    def get_keypoints(self, data):
+    def get_keypoints(self, data,list =[0,5,9]):
         '''
         0,1,5,9,13,17
         '''
         landmarks_list = []
         for index, row in data.iterrows():
             landmarks = []
-            for i in [0,5,9]:
+            for i in list:
                 points = SE3.Tx(row[f"{i}_x_norm"]) @ SE3.Ty(row[f"{i}_y_norm"]) @ SE3.Tz(row[f"{i}_z_norm"])
                 transformations = SE3.Rz(-90,unit='deg') 
                 new_points =  transformations * points 
@@ -81,6 +81,8 @@ class hand_pose:
             landmarks_list.append(landmarks.copy())
 
         return np.array(landmarks_list)
+    
+
     
     def get_simulated_gripper_size(self, data):
         scale = []
@@ -141,6 +143,31 @@ def draw3d(plt, ax, world_landmarks, connnection):
     plt.pause(0.001)
 
 
+def find_transformation_vectors(vectorlist1, vectorlist2,point1,point2):
+    """
+    Find transformation matrix between two sets of orthogonal vectors
+    Args:
+        vectorlist1: List of 3 orthogonal unit vectors [end_vector, left_vector, cross_vector]
+        vectorlist2: List of 3 orthogonal unit vectors [end_vector, left_vector, cross_vector]
+    Returns:
+        roll pitch yaw
+    """
+    R1 = np.column_stack(vectorlist1)
+    R2 = np.column_stack(vectorlist2)
+    T1 = np.eye(4)
+    T1[:3, :3] = R1
+    T1[:3, 3] = point1
+
+    T2 = np.eye(4)
+    T2[:3, :3] = R2
+    T2[:3, 3] = point2
+
+    #from T1 to T2
+    T = T2 @ np.linalg.inv(T1)
+
+    return T
+
+
 def find_transformation(X, Y,translation_only=False):
 
     # Calculate centroids
@@ -168,6 +195,49 @@ def find_transformation(X, Y,translation_only=False):
     return T
 
 
+def _4points_to_3d(points,find_transformation=False):
+        top_left,top_right,bottom_left,bottom_right = points
+        # Calculate base vectors and normalize
+        base_mid = np.mean([top_left, top_right], axis=0)
+        base_vector = np.array(bottom_left) - np.array(bottom_right)
+        base_vector = base_vector / np.linalg.norm(base_vector)
+
+        plane_vector = np.cross(base_vector, np.array(top_left) - np.array(bottom_right))
+        plane_vector = plane_vector / np.linalg.norm(plane_vector)
+
+        left_vector = np.cross(base_vector, plane_vector)
+        left_vector = left_vector / np.linalg.norm(left_vector)
+        right_vector = np.cross(base_vector, plane_vector)
+        right_vector = right_vector / np.linalg.norm(right_vector)
+
+        distance = np.linalg.norm(np.array(top_left) - np.array(top_right))
+
+        distance = min(distance, 0.1)
+        
+        top_left_start = base_mid + base_vector * distance / 2
+        top_right_start = base_mid - base_vector * distance / 2
+
+        top_left_end = top_left_start + left_vector * 0.05
+        top_right_end = top_right_start + right_vector * 0.05
+        if find_transformation:
+            '''
+            return vectors
+            '''
+            end_vector = np.array(top_right_end) - np.array(top_left_end)
+            end_vector = end_vector / np.linalg.norm(end_vector)
+            left_vector = np.array(top_left_start) - np.array(top_left_end)
+            left_vector = left_vector / np.linalg.norm(left_vector)
+            cross_vector = np.cross(end_vector,left_vector)
+            cross_vector = cross_vector/np.linalg.norm(cross_vector)
+            cross_vector2 = np.cross(end_vector,cross_vector)
+            cross_vector2 = cross_vector2/np.linalg.norm(cross_vector2)
+
+            return [end_vector,cross_vector,cross_vector2],top_left_end
+            #        x            y            z
+        else:
+            return top_left_start,top_left_end,top_right_start,top_right_end
+
+
 
 def smooth_trajectory(T_):
 
@@ -192,19 +262,11 @@ def smooth_trajectory(T_):
         T_out.append(SE3(np.linalg.inv(smooth_transformations_[i]) @ smooth_transformations_[i+1]))
     return T_out
 
-
-
-
-
-
-
-
-
-def draw_movingframe(T,keypoints):
+def draw_movingframe(T_ori_trans,keypoints):
     """
     动态绘制点云和坐标系的移动过程
     :param point_clouds: 初始点云数据 (N x 3 的 numpy 数组)
-    :param T: SE3 变换矩阵列表
+    :param T: SE3 变换矩阵列表[T_ori,T_trans]
     """
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
@@ -218,30 +280,22 @@ def draw_movingframe(T,keypoints):
     ax.set_zlabel("Z-axis")
     trajectory = []  # List to store trajectory points
     points =[]  
-    T_overall = SE3(np.eye(4))
-    T_list = []
-    for i in range(len(T)):
-        pointcloud = []
+
+    for i in range(len(T_ori_trans)):
         pointcloud2 = []
-        T_overall = T_overall * SE3(trnorm(T[i]))
+        # t_trans,T_ori = T_ori_trans[i]
         for j in range(len(keypoints[i])):
-            pointcloud.append(SE3(trnorm(T[i])) * SE3.Trans(keypoints[i][j]).t)
-            pointcloud2.append(T_overall * SE3.Trans(keypoints[0][j]).t)
+            # point_temp = (SE3.Trans(keypoints[0][j] + t_trans)*SE3(T_ori)).t
+            point_temp = (SE3(T_ori_trans[i])*SE3.Trans(keypoints[0][j])).t
+            pointcloud2.append(point_temp)
         
-        print("pointcloud ",pointcloud)
         print("key points",keypoints[i+1])
         print("overall ",pointcloud2)
-
-
         print("============")
         
-
-
         points.append(np.array(pointcloud2))  # Convert pointcloud to numpy array
-        T_list.append(T_overall)
-        
-        transformed_points = T_overall.t
-        centroid  = transformed_points
+
+        centroid  = np.mean(pointcloud2,axis=0)
 
         trajectory.append(centroid)
 
@@ -261,9 +315,6 @@ def draw_movingframe(T,keypoints):
             ax.plot(smoothed_trajectory[:i, 0], smoothed_trajectory[:i, 1], smoothed_trajectory[:i, 2], c='r', label="Trajectory")
             ax.scatter(smoothed_trajectory[i, 0], smoothed_trajectory[i, 1], smoothed_trajectory[i, 2], c='b', s=5, label="Point Cloud")
             ax.scatter(keypoints[i][:, 0], keypoints[i][:, 1], keypoints[i][:, 2], c='y', s=5, label="Key Points")
-            # Convert points[i] to numpy array if it isn't already
-            current_points = np.array(points[i])
-            ax.scatter(current_points[:, 0], current_points[:, 1], current_points[:, 2], c='g', s=5, label="transformed points")
 
             ax.legend()
             plt.pause(0.5)  # 每帧暂停 1 秒
@@ -274,17 +325,17 @@ def draw_movingframe(T,keypoints):
 if __name__ == "__main__":
     pd_data = hand_pose("/home/hanglok/work/hand_gripper/mediapipe_hand/data_save/norm_point_cloud/hand_pose_2024-12-31_16-05-16.csv")
     data = pd_data.get_hand_pose(2,50)
-    keypoints = pd_data.get_keypoints(data)
+    keypoints = pd_data.get_keypoints(data,list=[0,5,9])
+    new_keypoints = pd_data.get_keypoints(data,list=[4,8,2,9])
     # while True:
     # pd_data.draw_carton(back_hand, delay=0.1)
     T_list = []
     for i in range(len(keypoints)-1):
-        # print("back hand ", back_hand[i])
-        T_list.append(find_transformation(keypoints[i], keypoints[i+1],translation_only=True))
+        vector_list1, point1  = _4points_to_3d(new_keypoints[0],find_transformation=True)
+        vector_list2, point2  = _4points_to_3d(new_keypoints[i+1],find_transformation=True)
 
-    T_new = smooth_trajectory(T_list)
-
-
+        T_ori = find_transformation_vectors(vector_list1,vector_list2,point1,point2)
+        T_list.append(T_ori)
     draw_movingframe(T_list,keypoints)
 
 

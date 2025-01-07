@@ -12,7 +12,7 @@ import rospy
 
 # Local imports
 from mediapipe_hand.gesture import detect_all_finger_state, number_gesture, calculate_distance
-from gripper_overlay import GripperOverlay
+from gripper_overlay import GripperOverlay,draw_gripper_from_points_cv
 
 # ROS setup
 sys.path.append('/home/hanglok/work/ur_slam')
@@ -183,11 +183,10 @@ try:
                 point8 = data_point_cloud[36:39]  # index finger tip
                 point2 = data_point_cloud[6:9]    # thumb base
                 point9 = data_point_cloud[27:30]  # index finger base
-                point2_9 = np.mean([point2, point9], axis=0)
 
                 draw_hand(ax, data_point_cloud)
                 gripper.draw_gripper_from_points(point4, point8, point2, point9)
-                gripper.draw_gripper_from_points_cv(point4, point8, point2, point9, color_image, CAMERA_PARAMS['fx'], CAMERA_PARAMS['fy'], CAMERA_PARAMS['cx'], CAMERA_PARAMS['cy'])
+                draw_gripper_from_points_cv(point4, point8, point2, point9, color_image)
                 plt.draw()
                 plt.pause(0.001)
 
