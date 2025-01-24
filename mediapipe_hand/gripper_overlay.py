@@ -5,7 +5,6 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from mediapipe_hand.read_hand import _4points_to_3d
 
 
 CAMERA_PARAMS = {
@@ -34,7 +33,6 @@ def get_gripper_scale(distance: float) -> float:
     gripper_scale = 1000 * distance / 0.1
     gripper_scale = max(0, min(gripper_scale, 1000))  # Clamp between 0-1000
     return (gripper_scale // 200) * 200  # Round to nearest 200
-
 
 
 
@@ -133,49 +131,70 @@ class GripperOverlay:
             line.remove()
         self.gripper_lines = []
 
-    def draw_gripper_from_points(self, top_left, top_right, bottom_left, bottom_right):
-        """Draw gripper based on four input points."""
-        self._clear_gripper()
 
-        # Calculate base vectors
-        base_mid = np.mean([top_left, top_right], axis=0)
-        base_vector = np.array(bottom_left) - np.array(bottom_right)
-        base_vector = base_vector / np.linalg.norm(base_vector)
+    def draw_gripper_from_quaternion(self,x_axis,y_axis,z_axis,point_2,point_4,point_5,point_8):
+
+        point_2,point_4,point_5,point_8 = np.array(point_2),np.array(point_4),np.array(point_5),np.array(point_8)
+
+        distance = np.linalg.norm(point_4-point_8)
         
-        plane_vector = np.cross(base_vector, np.array(top_left) - np.array(bottom_right))
-        plane_vector = plane_vector / np.linalg.norm(plane_vector)
+        top_left_end = point_2
+        top_left_start = top_left_end-z_axis*0.05
+        top_right_end = point_2+x_axis*distance
+        top_right_start = top_right_end-z_axis*0.05
+        self.ax.plot([top_left_start[0], top_left_end[0]], [top_left_start[1], top_left_end[1]], [top_left_start[2], top_left_end[2]], color='blue')
+        self.ax.plot([top_right_start[0], top_right_end[0]], [top_right_start[1], top_right_end[1]], [top_right_start[2], top_right_end[2]], color='blue')
+        self.ax.plot([top_left_end[0], top_right_end[0]], [top_left_end[1], top_right_end[1]], [top_left_end[2], top_right_end[2]], color='red')
 
-        # Calculate gripper vectors
-        left_vector = right_vector = np.cross(base_vector, plane_vector)
-        left_vector = right_vector = left_vector / np.linalg.norm(left_vector)
 
-        # Calculate positions
-        distance = np.linalg.norm(np.array(top_left) - np.array(top_right))
-        top_left_start = base_mid + base_vector * distance/2
-        top_right_start = base_mid - base_vector * distance/2
-        top_left_end = top_left_start + left_vector * 0.05
-        top_right_end = top_right_start + right_vector * 0.05
+        return top_left_start,top_left_end,top_right_end
 
+
+    def draw_gripper_from_points(self, point_2, point_4, point_5, point_8):
+        point_2, point_4, point_5, point_8 = np.array(point_2), np.array(point_4), np.array(point_5), np.array(point_8)
+        top_left_start, top_left_end = point_4, point_2
+        distance = np.linalg.norm(point_4 - point_8)
+
+        vector1 = point_4 - point_2
+        vector2 = point_5 - point_2
+
+        # Check if vector1 and vector2 are parallel
+        if np.linalg.norm(np.cross(vector1, vector2)) < 1e-6:
+            raise ValueError("vector1 and vector2 are parallel, cannot define a plane.")
+
+        # Calculate plane normal
+        plane_vector3 = np.cross(vector1, vector2)
+        plane_vector3 = plane_vector3 / np.linalg.norm(plane_vector3)
+
+        # Calculate vector3
+        vector3 = np.cross(vector1, plane_vector3)
+        if np.linalg.norm(vector3) < 1e-6:
+            raise ValueError("vector3 is a zero vector.")
+        vector3 = vector3 / np.linalg.norm(vector3)
+
+        # Calculate top_right_end and top_right_start
+        top_right_end = point_2-vector3*distance
+        top_right_start = top_right_end+vector1
         # Draw gripper rods
-        for start, end in [(top_left_start, top_left_end), (top_right_start, top_right_end)]:
-            rod = self._create_cuboid_vertices(start, end, self.gripper_height, self.column_depth)
-            self._draw_lines(rod, color='blue')
+        self.ax.plot([top_left_start[0], top_left_end[0]], [top_left_start[1], top_left_end[1]], [top_left_start[2], top_left_end[2]], color='blue')
+        self.ax.plot([top_right_start[0], top_right_end[0]], [top_right_start[1], top_right_end[1]], [top_right_start[2], top_right_end[2]], color='blue')
+        self.ax.plot([top_left_end[0], top_right_end[0]], [top_left_end[1], top_right_end[1]], [top_left_end[2], top_right_end[2]], color='red')
 
-        # Draw points and legend
-        points = [(top_left, 'red', 'Top Left'), 
-                 (top_right, 'green', 'Top Right'),
-                 (bottom_left, 'orange', 'Bottom Left'),
-                 (bottom_right, 'purple', 'Bottom Right')]
-        
-        for point, color, label in points:
-            self.ax.scatter(*point, color=color, s=50, label=label)
-        self.ax.legend()
+        # Validate orthogonality
+        dot_product = np.dot(vector1, vector3)
+        if abs(dot_product) > 1e-6:
+            print("Warning: vector1 and vector3 are not perpendicular.")
+
+        return top_left_start, top_left_end, top_right_end
+
+
+
 
 def draw_gripper_from_points_cv(
-        top_left: tuple, 
-        top_right: tuple, 
-        bottom_left: tuple, 
-        bottom_right: tuple, 
+        point_2: tuple, 
+        point_4: tuple, 
+        point_5: tuple, 
+        point_8: tuple, 
         image: np.ndarray,
     ) -> None:
         """
@@ -197,8 +216,26 @@ def draw_gripper_from_points_cv(
             y_2d = int((y * fy / z) + cy)
             return (x_2d, y_2d)
 
-        top_left_start,top_left_end,top_right_start,top_right_end = _4points_to_3d([top_left, top_right, bottom_left, bottom_right])
+        point_2,point_4,point_5,point_8 = np.array(point_2),np.array(point_4),np.array(point_5),np.array(point_8)
 
+
+        top_left_start,top_left_end = point_4,point_2
+
+
+        distance = np.linalg.norm(point_4-point_8)
+
+        vector1 = point_4-point_2
+        vector2 = point_5-point_2
+        plane_vector3 = np.cross(vector1,vector2)
+        plane_vector3 = plane_vector3/np.linalg.norm(plane_vector3)
+
+        vector3 = np.cross(vector1,plane_vector3)
+        vector3 = vector3/np.linalg.norm(vector3)
+        # in plane_vector3 direction 
+        top_right_end = point_2-vector3*distance
+
+        top_right_start = top_right_end+vector1
+    
         # Project and draw lines
         top_left_2d = project_point(top_left_start)
         top_left_end_2d = project_point(top_left_end)
@@ -209,15 +246,15 @@ def draw_gripper_from_points_cv(
         cv2.line(image, top_right_2d, top_right_end_2d, (255, 0, 0), 2)  # Blue line
 
         # Draw the input points
-        bottom_left_2d = project_point(bottom_left)
-        bottom_right_2d = project_point(bottom_right)
+        # bottom_left_2d = project_point(point_5)
+        # bottom_right_2d = project_point(point_8)
 
 
         cv2.line(image, top_left_end_2d, top_right_end_2d, (0, 0, 255), 2)  # Red line
         cv2.circle(image, top_left_2d, 5, (0, 0, 255), -1)  # Red point
         cv2.circle(image, top_right_2d, 5, (0, 255, 0), -1)  # Green point
-        cv2.circle(image, bottom_left_2d, 5, (0, 165, 255), -1)  # Orange point
-        cv2.circle(image, bottom_right_2d, 5, (128, 0, 128), -1)  # Purple point
+        # cv2.circle(image, bottom_left_2d, 5, (0, 165, 255), -1)  # Orange point
+        # cv2.circle(image, bottom_right_2d, 5, (128, 0, 128), -1)  # Purple point
         return top_left_start,top_left_end,top_right_end
 
 

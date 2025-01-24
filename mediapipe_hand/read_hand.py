@@ -7,6 +7,35 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.transform import Rotation as R
 from spatialmath.base import trnorm
 
+def get_world_pose(top_left_start,top_left_end,top_right_end):
+    # z axis    
+    x_vector = (top_left_start - top_left_end)/np.linalg.norm(top_left_end - top_left_start)
+    # y axis
+    y_vector = (-top_right_end+top_left_end)/np.linalg.norm(-top_right_end+top_left_end)
+    # x axis
+
+    z_vector = np.cross(x_vector,y_vector)
+    z_vector = z_vector/np.linalg.norm(z_vector)
+    # print(x_vector,y_vector,z_vector)
+    return [x_vector,y_vector,z_vector]
+
+
+
+def _4points_to_3d(x_axis,y_axis,z_axis,point_2,point_4,point_5,point_8):
+
+        point_2,point_4,point_5,point_8 = np.array(point_2),np.array(point_4),np.array(point_5),np.array(point_8)
+
+        distance = np.linalg.norm(point_4-point_8)
+        
+        top_left_end = point_2
+        top_left_start = top_left_end-z_axis*0.05
+        top_right_end = point_2+x_axis*distance
+        top_right_start = top_right_end-z_axis*0.05
+        return top_left_start,top_left_end,top_right_end
+
+
+
+
 def get_gripper_scale(distance):
     #each set is 3 numbers get the distance between the two points(4 and 8)
 
@@ -14,38 +43,6 @@ def get_gripper_scale(distance):
     gripper_scale = max(0, min(gripper_scale, 1000))  # Clamp gripper_scale between 0 and 1000
     gripper_scale = (gripper_scale // 200) * 200     # Round down to the nearest multiple of 200
     return gripper_scale
-
-
-def decompose_transformations(transformations):
-    translations = []
-    rotations = []
-    for T in transformations:
-        translations.append(T[:3, 3])
-        rotations.append(R.from_matrix(T[:3, :3]))
-
-    return np.array(translations), rotations
-
-def smooth_transformations(translations, rotations):
-    # Smooth translations
-    smoothed_translations = gaussian_filter1d(translations, sigma=1, axis=0)
-    
-    # Convert rotations to rotation vectors for smoothing
-    rotation_vectors = np.array([r.as_rotvec() for r in rotations])
-    smoothed_rotation_vectors = gaussian_filter1d(rotation_vectors, sigma=1, axis=0)                                                                                                                                                                                        
-    
-    # Convert back to rotation objects
-    smoothed_rotations = [R.from_rotvec(rv) for rv in smoothed_rotation_vectors]
-    
-    return smoothed_translations, smoothed_rotations
-
-def recompose_transformations(smoothed_translations, smoothed_rotations):
-    smoothed_transformations = []
-    for t, r in zip(smoothed_translations, smoothed_rotations):
-        T = np.eye(4)
-        T[:3, :3] = r.as_matrix()
-        T[:3, 3] = t
-        smoothed_transformations.append(T)
-    return smoothed_transformations
 
 
 """
@@ -93,6 +90,7 @@ class hand_pose:
             scale.append(get_gripper_scale(distance))
         return scale
     
+
     def draw_carton(self, data, delay=0.5):
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
@@ -117,30 +115,6 @@ class hand_pose:
         
         plt.show()  # 展示最后一帧
         plt.close()  # 关闭图形
-    
-
-
-def draw3d(plt, ax, world_landmarks, connnection):
-    colorclass = plt.cm.ScalarMappable(cmap='jet')
-    colors = colorclass.to_rgba(np.linspace(0, 1, int(21)))
-    colormap = (colors[:, 0:3])
-    ax.clear()
-    ax.set_xlim3d(-1, 1)
-    ax.set_ylim3d(-1, 1)
-    ax.set_zlim3d(-1, 1)
-
-    landmarks = []
-    for index, landmark in enumerate(world_landmarks.landmark):
-        landmarks.append([landmark.x, landmark.z, landmark.y*(-1)])
-    landmarks = np.array(landmarks)
-
-    ax.scatter(landmarks[:, 0], landmarks[:, 1], landmarks[:, 2], c=np.array(colormap), s=10)
-    for _c in connnection:
-        ax.plot([landmarks[_c[0], 0], landmarks[_c[1], 0]],
-                [landmarks[_c[0], 1], landmarks[_c[1], 1]],
-                [landmarks[_c[0], 2], landmarks[_c[1], 2]], 'k')
-
-    plt.pause(0.001)
 
 
 def find_transformation_vectors(vectorlist1, vectorlist2,point1,point2):
@@ -163,8 +137,7 @@ def find_transformation_vectors(vectorlist1, vectorlist2,point1,point2):
     T2[:3, 3] = point2
 
     #from T1 to T2
-    T = T2 @ np.linalg.inv(T1)
-
+    T = np.linalg.inv(T1) @ T2  
     return T
 
 
@@ -195,74 +168,9 @@ def find_transformation(X, Y,translation_only=False):
     return T
 
 
-def _4points_to_3d(points,find_transformation=False):
-        top_left,top_right,bottom_left,bottom_right = points
-        # Calculate base vectors and normalize
-        base_mid = np.mean([top_left, top_right], axis=0)
-        base_vector = np.array(bottom_left) - np.array(bottom_right)
-        base_vector = base_vector / np.linalg.norm(base_vector)
-
-        plane_vector = np.cross(base_vector, np.array(top_left) - np.array(bottom_right))
-        plane_vector = plane_vector / np.linalg.norm(plane_vector)
-
-        left_vector = np.cross(base_vector, plane_vector)
-        left_vector = left_vector / np.linalg.norm(left_vector)
-        right_vector = np.cross(base_vector, plane_vector)
-        right_vector = right_vector / np.linalg.norm(right_vector)
-
-        distance = np.linalg.norm(np.array(top_left) - np.array(top_right))
-
-        distance = min(distance, 0.1)
-        
-        top_left_start = base_mid + base_vector * distance / 2
-        top_right_start = base_mid - base_vector * distance / 2
-
-        top_left_end = top_left_start + left_vector * 0.05
-        top_right_end = top_right_start + right_vector * 0.05
-        if find_transformation:
-            '''
-            return vectors
-            '''
-            end_vector = np.array(top_right_end) - np.array(top_left_end)
-            end_vector = end_vector / np.linalg.norm(end_vector)
-            left_vector = np.array(top_left_start) - np.array(top_left_end)
-            left_vector = left_vector / np.linalg.norm(left_vector)
-            cross_vector = np.cross(end_vector,left_vector)
-            cross_vector = cross_vector/np.linalg.norm(cross_vector)
-            cross_vector2 = np.cross(end_vector,cross_vector)
-            cross_vector2 = cross_vector2/np.linalg.norm(cross_vector2)
-
-            return [end_vector,cross_vector,cross_vector2],top_left_end
-            #        x            y            z
-        else:
-            return top_left_start,top_left_end,top_right_start,top_right_end
 
 
-
-def smooth_trajectory(T_):
-
-    T_list = []
-    T_overall =np.eye(4)
-    for i in T_:
-        T_overall = T_overall @ i
-        T_list.append(T_overall)
-    
-
-    translations, rotations = decompose_transformations(T_list)
-
-    smoothed_translations, smoothed_rotations = smooth_transformations(translations, rotations)
-    smooth_transformations_ = recompose_transformations(smoothed_translations, smoothed_rotations)
-
-
-    # transfer from T_overall to T
-    T_out = []
-    T_overall  = np.eye(4)
-    T_out.append(SE3(smooth_transformations_[0]))
-    for i in range(0,len(smooth_transformations_)-2,2):
-        T_out.append(SE3(np.linalg.inv(smooth_transformations_[i]) @ smooth_transformations_[i+1]))
-    return T_out
-
-def draw_movingframe(T_ori_trans,keypoints):
+def draw_movingframe(T_ori_trans, keypoints, is_smoothed=False):
     """
     动态绘制点云和坐标系的移动过程
     :param point_clouds: 初始点云数据 (N x 3 的 numpy 数组)
@@ -280,13 +188,15 @@ def draw_movingframe(T_ori_trans,keypoints):
     ax.set_zlabel("Z-axis")
     trajectory = []  # List to store trajectory points
     points =[]  
-
+    points.append(keypoints[0])
     for i in range(len(T_ori_trans)):
         pointcloud2 = []
         # t_trans,T_ori = T_ori_trans[i]
         for j in range(len(keypoints[i])):
-            # point_temp = (SE3.Trans(keypoints[0][j] + t_trans)*SE3(T_ori)).t
-            point_temp = (SE3(T_ori_trans[i])*SE3.Trans(keypoints[0][j])).t
+            if is_smoothed:
+                point_temp = (SE3(T_ori_trans[i])*SE3.Trans(points[-1][j])).t
+            else:
+                point_temp = (SE3(T_ori_trans[i])*SE3.Trans(keypoints[i][j])).t
             pointcloud2.append(point_temp)
         
         print("key points",keypoints[i+1])
@@ -302,9 +212,19 @@ def draw_movingframe(T_ori_trans,keypoints):
     # Apply Gaussian smoothing to the trajectory
     smoothed_trajectory = np.array(trajectory)
         
+    def plot_coordinate_frame(ax, T, origin, scale=0.1):
+        """Helper function to draw coordinate axes"""
+        R = T[:3, :3]
+        colors = ['r', 'g', 'b']  # x=red, y=green, z=blue
+        for i in range(3):
+            direction = R[:, i] * scale
+            ax.quiver(origin[0], origin[1], origin[2],
+                     direction[0], direction[1], direction[2],
+                     color=colors[i], arrow_length_ratio=0.2)
+
     for n in range(20):
         for i in range(1, len(smoothed_trajectory)):
-            ax.cla()  # 清除当前图形内容
+            ax.cla()
             ax.set_xlabel("X-axis")
             ax.set_ylabel("Y-axis")
             ax.set_zlabel("Z-axis")
@@ -312,13 +232,19 @@ def draw_movingframe(T_ori_trans,keypoints):
             ax.set_ylim(-1, 1)
             ax.set_zlim(-1, 1)
 
-            ax.plot(smoothed_trajectory[:i, 0], smoothed_trajectory[:i, 1], smoothed_trajectory[:i, 2], c='r', label="Trajectory")
-            ax.scatter(smoothed_trajectory[i, 0], smoothed_trajectory[i, 1], smoothed_trajectory[i, 2], c='b', s=5, label="Point Cloud")
-            ax.scatter(keypoints[i][:, 0], keypoints[i][:, 1], keypoints[i][:, 2], c='y', s=5, label="Key Points")
+            # Plot trajectory and point cloud
+            ax.plot(smoothed_trajectory[:i, 0], smoothed_trajectory[:i, 1], smoothed_trajectory[:i, 2], 
+                   c='r', label="Trajectory")
+            ax.scatter(smoothed_trajectory[i, 0], smoothed_trajectory[i, 1], smoothed_trajectory[i, 2], 
+                      c='b', s=5, label="Point Cloud")
+            
+            # Draw coordinate frame at current position
+            current_centroid = smoothed_trajectory[i]
+            plot_coordinate_frame(ax, T_ori_trans[i-1], current_centroid)
 
             ax.legend()
-            plt.pause(0.5)  # 每帧暂停 1 秒
-        
+            plt.pause(0.5)
+
     plt.show()
     plt.close()
 
@@ -327,17 +253,11 @@ if __name__ == "__main__":
     data = pd_data.get_hand_pose(2,50)
     keypoints = pd_data.get_keypoints(data,list=[0,5,9])
     new_keypoints = pd_data.get_keypoints(data,list=[4,8,2,9])
-    # while True:
-    # pd_data.draw_carton(back_hand, delay=0.1)
-    T_list = []
-    for i in range(len(keypoints)-1):
-        vector_list1, point1  = _4points_to_3d(new_keypoints[0],find_transformation=True)
-        vector_list2, point2  = _4points_to_3d(new_keypoints[i+1],find_transformation=True)
+    full_hand = pd_data.get_keypoints(data,list=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19])
+    pd_data.draw_carton(full_hand)
 
-        T_ori = find_transformation_vectors(vector_list1,vector_list2,point1,point2)
-        T_list.append(T_ori)
-    draw_movingframe(T_list,keypoints)
 
+    
 
 
 

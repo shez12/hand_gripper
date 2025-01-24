@@ -12,12 +12,12 @@ import rospy
 
 # Local imports
 from mediapipe_hand.gesture import detect_all_finger_state, number_gesture, calculate_distance
-from gripper_overlay import GripperOverlay,draw_gripper_from_points_cv
+from mediapipe_hand.gripper_overlay import GripperOverlay,draw_gripper_from_points_cv
 
 # ROS setup
 sys.path.append('/home/hanglok/work/ur_slam')
 import ros_utils.myGripper
-rospy.init_node('gripper_control', anonymous=True)
+# rospy.init_node('gripper_control', anonymous=True)
 
 # Initialize 3D plotting
 fig = plt.figure()
@@ -100,7 +100,7 @@ def process_hand_landmarks(hand_landmarks, rgb_image, depth_image):
     
     for idx, landmark in enumerate(hand_landmarks.landmark):
         x_pix = int(landmark.x * rgb_image.shape[1])
-        y_pix = int(landmark.y * rgb_image.shape[0])
+        y_pix = int(landmark.y * rgb_image.shape[0]) 
         data_pixel.append([x_pix, y_pix])
         
         if idx == 0:
@@ -124,8 +124,8 @@ def process_hand_landmarks(hand_landmarks, rgb_image, depth_image):
 # Initialize RealSense pipeline
 pipeline = rs.pipeline()
 config = rs.config()
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 60)
+config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 60)
 pipeline.start(config)
 align = rs.align(rs.stream.color)
 
@@ -179,14 +179,15 @@ try:
                     continue
                 
                 # Extract landmark points
-                point4 = data_point_cloud[12:15]  # thumb tip
-                point8 = data_point_cloud[36:39]  # index finger tip
                 point2 = data_point_cloud[6:9]    # thumb base
+                point4 = data_point_cloud[12:15]  # thumb tip
+                point5 = data_point_cloud[15:18]  # thumb middle
+                point8 = data_point_cloud[36:39]  # index finger tip
                 point9 = data_point_cloud[27:30]  # index finger base
 
                 draw_hand(ax, data_point_cloud)
-                gripper.draw_gripper_from_points(point4, point8, point2, point9)
-                draw_gripper_from_points_cv(point4, point8, point2, point9, color_image)
+                gripper.draw_gripper_from_points(point2, point4, point5, point8)
+                draw_gripper_from_points_cv(point2, point4, point5, point8, color_image)
                 plt.draw()
                 plt.pause(0.001)
 
